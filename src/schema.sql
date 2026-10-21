@@ -45,6 +45,7 @@ BEGIN
         role VARCHAR(20) NOT NULL, -- 'P1', 'P2', 'P3', 'P4', 'GUEST'
         status VARCHAR(50) NOT NULL DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
         is_safety_committee BIT NOT NULL DEFAULT 0, -- 1 = เป็น คปอ, 0 = ไม่ได้เป็น
+        responsible_area NVARCHAR(50) NULL,        -- WH, PD1, PD2, MT1, MT2, UT, HR, QC1, QC2, QA, ENG
         avatar_url NVARCHAR(MAX) NULL,
         created_at NVARCHAR(50) NOT NULL,
         updated_at NVARCHAR(50) NOT NULL
@@ -55,6 +56,12 @@ END;
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.users') AND name = 'email')
 BEGIN
     ALTER TABLE dbo.users ADD email NVARCHAR(255) NULL;
+END;
+
+-- Ensure responsible_area column exists on users (WH, PD1, PD2, MT1, MT2, UT, HR, QC1, QC2, QA, ENG)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.users') AND name = 'responsible_area')
+BEGIN
+    ALTER TABLE dbo.users ADD responsible_area NVARCHAR(50) NULL;
 END;
 
 -- Ensure indexes on users
@@ -251,6 +258,7 @@ BEGIN
         reporter_id VARCHAR(50) NOT NULL,
         reporter_name NVARCHAR(255) NOT NULL,
         reporter_department NVARCHAR(255) NULL,
+        responsible_area NVARCHAR(50) NULL,        -- WH, PD1, PD2, MT1, MT2, UT, HR, QC1, QC2, QA, ENG
         status VARCHAR(50) NOT NULL DEFAULT 'PENDING_ACTION', -- 'PENDING_ACTION', 'PENDING_REVIEW', 'APPROVED', 'REJECTED', 'COMMENDED'
         after_photo_url NVARCHAR(MAX) NULL,        -- After photo
         action_taken NVARCHAR(MAX) NULL,
@@ -264,6 +272,12 @@ BEGIN
         created_at NVARCHAR(50) NOT NULL,
         updated_at NVARCHAR(50) NOT NULL
     );
+END;
+
+-- Ensure responsible_area column exists on safety_findings (WH, PD1, PD2, MT1, MT2, UT, HR, QC1, QC2, QA, ENG)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.safety_findings') AND name = 'responsible_area')
+BEGIN
+    ALTER TABLE dbo.safety_findings ADD responsible_area NVARCHAR(50) NULL;
 END;
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_findings_patrol' AND object_id = OBJECT_ID('dbo.safety_findings'))

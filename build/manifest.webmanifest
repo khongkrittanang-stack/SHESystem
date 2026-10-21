@@ -1,1 +1,75 @@
-{"name":"SHE Safety System - ระบบตรวจสอบอุปกรณ์ดับเพลิง","short_name":"SHE System","description":"ระบบบริหารจัดการความปลอดภัยและตรวจสอบอุปกรณ์ดับเพลิง (SHE System)","start_url":"/","display":"standalone","background_color":"#FCF9F4","theme_color":"#A04830","lang":"en","scope":"/","orientation":"portrait-primary","icons":[{"src":"/pwa-192x192.png","sizes":"192x192","type":"image/png"},{"src":"/pwa-512x512.png","sizes":"512x512","type":"image/png"},{"src":"/pwa-maskable-512x512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}]}
+{
+  "name": "SHE System - ระบบบริหารจัดการความปลอดภัย",
+  "short_name": "SHE System",
+  "description": "ระบบบริหารจัดการความปลอดภัย อาชีวอนามัย และตรวจสอบอุปกรณ์ดับเพลิง โรงงาน JDE Peet's",
+  "start_url": "/",
+  "scope": "/",
+  "id": "/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#FCF9F4",
+  "theme_color": "#FCF9F4",
+  "lang": "th",
+  "dir": "ltr",
+  "categories": [
+    "business",
+    "utilities",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "ตรวจอุปกรณ์ดับเพลิง",
+      "short_name": "ตรวจอุปกรณ์",
+      "description": "เปิดหน้าระบบตรวจสอบอุปกรณ์ดับเพลิง",
+      "url": "/?tab=equipment",
+      "icons": [
+        {
+          "src": "/icons/icon-192x192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "แดชบอร์ดความปลอดภัย",
+      "short_name": "แดชบอร์ด",
+      "description": "ดูสถิติและสถานะความปลอดภัย",
+      "url": "/?tab=dashboard",
+      "icons": [
+        {
+          "src": "/icons/icon-192x192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ]
+}

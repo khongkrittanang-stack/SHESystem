@@ -657,7 +657,7 @@ app.get('/api/users', async (req, res) => {
 
     const result = await query(`
       SELECT id, username, password, full_name, pending_full_name, email, department, position, role,
-             status, is_safety_committee, avatar_url, created_at, updated_at
+             status, is_safety_committee, responsible_area, avatar_url, created_at, updated_at
       FROM dbo.users
       ORDER BY created_at DESC
     `);
@@ -683,8 +683,8 @@ app.post('/api/users', async (req, res) => {
     const now = new Date().toISOString();
 
     await query(`
-      INSERT INTO dbo.users (id, username, password, full_name, email, department, position, role, status, is_safety_committee, avatar_url, created_at, updated_at)
-      VALUES (@id, @username, @password, @full_name, @email, @department, @position, @role, 'approved', @is_safety_committee, @avatar_url, @created_at, @updated_at)
+      INSERT INTO dbo.users (id, username, password, full_name, email, department, position, role, status, is_safety_committee, responsible_area, avatar_url, created_at, updated_at)
+      VALUES (@id, @username, @password, @full_name, @email, @department, @position, @role, 'approved', @is_safety_committee, @responsible_area, @avatar_url, @created_at, @updated_at)
     `, {
       id,
       username: data.username,
@@ -695,6 +695,7 @@ app.post('/api/users', async (req, res) => {
       position: data.position || '',
       role: data.role || 'P1',
       is_safety_committee: data.is_safety_committee ? 1 : 0,
+      responsible_area: data.responsible_area ? data.responsible_area.trim() : null,
       avatar_url: data.avatar_url || '',
       created_at: now,
       updated_at: now
@@ -713,6 +714,9 @@ app.put('/api/users/:id', async (req, res) => {
     const data = req.body;
     const now = new Date().toISOString();
 
+    const hasResponsibleArea = data.responsible_area !== undefined ? 1 : 0;
+    const responsibleAreaVal = data.responsible_area ? data.responsible_area.trim() : null;
+
     await query(`
       UPDATE dbo.users SET
         full_name = COALESCE(@full_name, full_name),
@@ -722,6 +726,7 @@ app.put('/api/users/:id', async (req, res) => {
         role = COALESCE(@role, role),
         status = COALESCE(@status, status),
         is_safety_committee = COALESCE(@is_safety_committee, is_safety_committee),
+        responsible_area = CASE WHEN @has_responsible_area = 1 THEN @responsible_area ELSE responsible_area END,
         password = COALESCE(@password, password),
         avatar_url = COALESCE(@avatar_url, avatar_url),
         updated_at = @updated_at
@@ -734,6 +739,8 @@ app.put('/api/users/:id', async (req, res) => {
       role: data.role || null,
       status: data.status || null,
       is_safety_committee: data.is_safety_committee !== undefined ? (data.is_safety_committee ? 1 : 0) : null,
+      has_responsible_area: hasResponsibleArea,
+      responsible_area: responsibleAreaVal,
       password: data.password || null,
       avatar_url: data.avatar_url || null,
       username: data.username || null,
@@ -2376,8 +2383,8 @@ app.delete('/api/safety-patrols/:id', async (req, res) => {
 // 10.2 Safety Findings
 app.get('/api/safety-findings', async (req, res) => {
   try {
-    const { patrolId, category } = req.query;
-    const cacheKey = `findings_${patrolId || 'all'}_${category || 'all'}`;
+    const { patrolId, category, responsible_area } = req.query;
+    const cacheKey = `findings_${patrolId || 'all'}_${category || 'all'}_${responsible_area || 'all'}`;
     const cached = apiCache.get(cacheKey);
     if (cached) return res.json(cached);
 
@@ -2390,6 +2397,10 @@ app.get('/api/safety-findings', async (req, res) => {
     if (category) {
       queryText += ' AND category = @category';
       params.category = category;
+    }
+    if (responsible_area) {
+      queryText += ' AND responsible_area = @responsible_area';
+      params.responsible_area = responsible_area;
     }
     queryText += ' ORDER BY created_at DESC';
     const result = await query(queryText, params);
@@ -2447,11 +2458,11 @@ app.post('/api/safety-findings', async (req, res) => {
       INSERT INTO dbo.safety_findings (
         id, patrol_id, category, sub_type, location, description,
         recommendation, photo_url, reporter_id, reporter_name,
-        reporter_department, status, created_at, updated_at
+        reporter_department, responsible_area, status, created_at, updated_at
       ) VALUES (
         @id, @patrol_id, @category, @sub_type, @location, @description,
         @recommendation, @photo_url, @reporter_id, @reporter_name,
-        @reporter_department, @status, @created_at, @updated_at
+        @reporter_department, @responsible_area, @status, @created_at, @updated_at
       )
     `, {
       id,
@@ -2465,6 +2476,7 @@ app.post('/api/safety-findings', async (req, res) => {
       reporter_id: data.reporter_id,
       reporter_name: data.reporter_name,
       reporter_department: data.reporter_department || '',
+      responsible_area: data.responsible_area ? data.responsible_area.trim() : null,
       status: data.status || defaultStatus,
       created_at: now,
       updated_at: now
@@ -2579,8 +2591,11 @@ app.put('/api/safety-findings/:id/review', async (req, res) => {
 app.put('/api/safety-findings/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { category, sub_type, location, description, recommendation, photo_url } = req.body;
+    const { category, sub_type, location, description, recommendation, photo_url, responsible_area } = req.body;
     const now = new Date().toISOString();
+
+    const hasResponsibleArea = responsible_area !== undefined ? 1 : 0;
+    const responsibleAreaVal = responsible_area ? responsible_area.trim() : null;
 
     await query(`
       UPDATE dbo.safety_findings SET
@@ -2590,9 +2605,21 @@ app.put('/api/safety-findings/:id', async (req, res) => {
         description = COALESCE(@description, description),
         recommendation = COALESCE(@recommendation, recommendation),
         photo_url = COALESCE(@photo_url, photo_url),
+        responsible_area = CASE WHEN @has_responsible_area = 1 THEN @responsible_area ELSE responsible_area END,
         updated_at = @now
       WHERE id = @id
-    `, { id, category, sub_type, location, description, recommendation, photo_url, now });
+    `, {
+      id,
+      category,
+      sub_type,
+      location,
+      description,
+      recommendation,
+      photo_url,
+      has_responsible_area: hasResponsibleArea,
+      responsible_area: responsibleAreaVal,
+      now
+    });
 
     apiCache.invalidate('findings');
     res.json({ success: true, message: 'แก้ไขข้อมูลรายการตรวจ คปอ. เรียบร้อยแล้ว' });
