@@ -315,3 +315,44 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_inspections_equip_dat
 BEGIN
     CREATE INDEX idx_inspections_equip_date_desc ON dbo.inspections (equipment_id, inspection_date DESC);
 END;
+
+-- ===========================================================================
+-- 18. Equipment Categories (ตัวเลือกชนิดของอุปกรณ์ดับเพลิง Dropdown)
+-- ===========================================================================
+IF OBJECT_ID('dbo.equipment_categories', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.equipment_categories (
+        id VARCHAR(50) NOT NULL PRIMARY KEY,
+        equipment_type VARCHAR(20) NOT NULL DEFAULT 'EX',
+        name NVARCHAR(100) NOT NULL,
+        created_at NVARCHAR(50) NOT NULL
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_equip_cat_type' AND object_id = OBJECT_ID('dbo.equipment_categories'))
+BEGIN
+    CREATE INDEX idx_equip_cat_type ON dbo.equipment_categories (equipment_type);
+END;
+
+-- ===========================================================================
+-- 19. Inspection Checklist Items (หัวข้อการตรวจเช็คอุปกรณ์ - ปรับแต่งได้เฉพาะ P4)
+-- ===========================================================================
+IF OBJECT_ID('dbo.checklist_items', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.checklist_items (
+        id VARCHAR(50) NOT NULL PRIMARY KEY,
+        equipment_type VARCHAR(20) NOT NULL, -- 'EX', 'FHC', 'FH', 'HD', 'FDC'
+        label NVARCHAR(255) NOT NULL,
+        description NVARCHAR(MAX) NULL,
+        applicable_category VARCHAR(50) NULL DEFAULT 'ALL', -- 'ALL', 'CO2', 'DRY_CHEMICAL'
+        order_index INT NOT NULL DEFAULT 0,
+        is_active BIT NOT NULL DEFAULT 1,
+        created_at NVARCHAR(50) NOT NULL
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_checklist_type_order' AND object_id = OBJECT_ID('dbo.checklist_items'))
+BEGIN
+    CREATE INDEX idx_checklist_type_order ON dbo.checklist_items (equipment_type, order_index);
+END;
+

@@ -2,49 +2,25 @@
 <html lang="th">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>SHE System - ระบบบริหารจัดการความปลอดภัยและตรวจสอบอุปกรณ์ดับเพลิง</title>
-    <meta name="description" content="ระบบบริหารจัดการความปลอดภัย อาชีวอนามัย และตรวจสอบอุปกรณ์ดับเพลิง โรงงาน JDE Peet's" />
-    <meta name="application-name" content="SHE System" />
-
-    <!-- PWA & Mobile Web App Manifest -->
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="alternate" type="application/manifest+json" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#FCF9F4" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#A04830" />
+    <meta name="description" content="ระบบบริหารจัดการความปลอดภัยและตรวจสอบอุปกรณ์ดับเพลิง SHE System" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="SHE System" />
-
-    <!-- Icons -->
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="shortcut icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192x192.png" />
-    <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512x512.png" />
-
+    <title>SHE System - ระบบบริหารจัดการความปลอดภัยและตรวจสอบอุปกรณ์ดับเพลิง</title>
     <!-- Google Fonts for Thai Language (Prompt) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
-    <script type="module" crossorigin src="/assets/index-CPQyY51u.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BjIsa2M8.css">
-  </head>
+    <script type="module" crossorigin src="/assets/index-CaKvYITe.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DnlaMC0q.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
   <body class="bg-[#FCF9F4] text-[#3F3A31] font-sans antialiased min-h-screen selection:bg-[#F1E1C1] selection:text-[#3F3A31]">
     <div id="root"></div>
-    <!-- Early Service Worker Registration for PWA -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-          navigator.serviceWorker.register('/sw.js', { scope: '/' })
-            .then(function(reg) {
-              console.log('[PWA] Service Worker registered with scope:', reg.scope);
-            })
-            .catch(function(err) {
-              console.warn('[PWA] Service Worker registration failed:', err);
-            });
-        });
-      }
-    </script>
   </body>
 </html>

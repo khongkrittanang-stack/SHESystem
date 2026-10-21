@@ -2637,6 +2637,275 @@ app.post('/api/cron/yearly-cleanup', async (req, res) => {
 });
 
 // ==========================================
+// 12. Equipment Categories Endpoints (Dropdowns)
+// ==========================================
+app.get('/api/equipment-categories', async (req, res) => {
+  try {
+    const cached = apiCache.get('equipment_categories');
+    if (cached) return res.json(cached);
+
+    const result = await query(`
+      SELECT id, equipment_type, name, created_at
+      FROM dbo.equipment_categories
+      ORDER BY created_at ASC
+    `);
+    const responseData = { categories: result.recordset || [] };
+    apiCache.set('equipment_categories', responseData, 120);
+    res.json(responseData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment-categories', async (req, res) => {
+  try {
+    const { id, equipment_type = 'EX', name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'กรุณากรอกชื่อชนิดอุปกรณ์' });
+    }
+    const catId = id || `cat_${Date.now()}`;
+    const cleanName = name.trim();
+    const now = new Date().toISOString();
+
+    await query(`
+      IF NOT EXISTS (SELECT 1 FROM dbo.equipment_categories WHERE id = @id OR (equipment_type = @equipment_type AND name = @name))
+      BEGIN
+        INSERT INTO dbo.equipment_categories (id, equipment_type, name, created_at)
+        VALUES (@id, @equipment_type, @name, @created_at)
+      END
+    `, {
+      id: catId,
+      equipment_type,
+      name: cleanName,
+      created_at: now
+    });
+
+    apiCache.invalidate('equipment_categories');
+    res.json({ success: true, category: { id: catId, equipment_type, name: cleanName, created_at: now } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/equipment-categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'กรุณากรอกชื่อชนิดอุปกรณ์' });
+    }
+
+    await query(`
+      UPDATE dbo.equipment_categories
+      SET name = @name
+      WHERE id = @id
+    `, {
+      id,
+      name: name.trim()
+    });
+
+    apiCache.invalidate('equipment_categories');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/equipment-categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query(`DELETE FROM dbo.equipment_categories WHERE id = @id`, { id });
+    apiCache.invalidate('equipment_categories');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 13. Inspection Checklist Items Endpoints (P4)
+// ==========================================
+app.get('/api/checklists', async (req, res) => {
+  try {
+    const { type } = req.query;
+    const cacheKey = type ? `checklists_${type}` : 'checklists_all';
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    let sqlQuery = `
+      SELECT id, equipment_type, label, description, applicable_category, order_index, is_active, created_at
+      FROM dbo.checklist_items
+      WHERE is_active = 1
+    `;
+    const params = {};
+    if (type) {
+      sqlQuery += ` AND equipment_type = @type`;
+      params.type = type;
+    }
+    sqlQuery += ` ORDER BY equipment_type ASC, order_index ASC`;
+
+    const result = await query(sqlQuery, params);
+    const responseData = { checklists: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 120);
+    res.json(responseData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/checklists', async (req, res) => {
+  try {
+    const { id, equipment_type, label, description, applicable_category = 'ALL', order_index, is_active = true } = req.body;
+    if (!equipment_type || !label || !label.trim()) {
+      return res.status(400).json({ error: 'กรุณาระบุประเภทอุปกรณ์และหัวข้อการตรวจเช็ค' });
+    }
+    const itemId = id || `${equipment_type.toLowerCase()}_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    await query(`
+      INSERT INTO dbo.checklist_items (id, equipment_type, label, description, applicable_category, order_index, is_active, created_at)
+      VALUES (@id, @equipment_type, @label, @description, @applicable_category, @order_index, @is_active, @created_at)
+    `, {
+      id: itemId,
+      equipment_type,
+      label: label.trim(),
+      description: description ? description.trim() : null,
+      applicable_category: applicable_category || 'ALL',
+      order_index: order_index || 99,
+      is_active: is_active ? 1 : 0,
+      created_at: now
+    });
+
+    apiCache.invalidate('checklists');
+    res.json({ success: true, item: { id: itemId, equipment_type, label, description, applicable_category, order_index, is_active } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/checklists/reorder', async (req, res) => {
+  try {
+    const { type, itemIds } = req.body;
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+      return res.status(400).json({ error: 'กรุณาส่งรายการ itemIds' });
+    }
+
+    for (let i = 0; i < itemIds.length; i++) {
+      await query(`
+        UPDATE dbo.checklist_items
+        SET order_index = @order_index
+        WHERE id = @id
+      `, {
+        id: itemIds[i],
+        order_index: i + 1
+      });
+    }
+
+    apiCache.invalidate('checklists');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/checklists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { label, description, applicable_category, order_index, is_active } = req.body;
+
+    await query(`
+      UPDATE dbo.checklist_items
+      SET label = COALESCE(@label, label),
+          description = @description,
+          applicable_category = COALESCE(@applicable_category, applicable_category),
+          order_index = COALESCE(@order_index, order_index),
+          is_active = COALESCE(@is_active, is_active)
+      WHERE id = @id
+    `, {
+      id,
+      label: label ? label.trim() : null,
+      description: description !== undefined ? (description ? description.trim() : null) : null,
+      applicable_category: applicable_category || null,
+      order_index: order_index !== undefined ? order_index : null,
+      is_active: is_active !== undefined ? (is_active ? 1 : 0) : null
+    });
+
+    apiCache.invalidate('checklists');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/checklists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query(`DELETE FROM dbo.checklist_items WHERE id = @id`, { id });
+    apiCache.invalidate('checklists');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/checklists/reset-default', async (req, res) => {
+  try {
+    await query(`TRUNCATE TABLE dbo.checklist_items;`);
+
+    await query(`
+      INSERT INTO dbo.checklist_items (id, equipment_type, label, description, applicable_category, order_index, is_active, created_at)
+      VALUES
+        -- EX
+        ('ex_code_tag', 'EX', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตัวถังตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_pressure', 'EX', N'เกจวัดแรงดัน (เกจชี้อยู่ในแถบสีเขียวปกติ)', N'เข็มชี้อยู่ในช่วงที่กำหนด ไม่ตกและไม่เกิน', 'DRY_CHEMICAL', 2, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_weight', 'EX', N'น้ำหนักถัง (ตรงตามเกณฑ์มาตรฐานที่ระบุ)', N'น้ำหนักสารดับเพลิงอยู่ในเกณฑ์มาตรฐาน ชั่งตรวจเช็คน้ำหนักตามรอบ', 'CO2', 3, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_body', 'EX', N'สภาพตัวถังภายนอก (ไม่ผุกร่อน ไม่บวม ไม่บุบ ไม่เป็นสนิม)', N'ตัวถังและสีสมบูรณ์ ไม่ผุพัง', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_pin_seal', 'EX', N'สลักนิรภัยและซีลล็อก (อยู่ในสภาพเรียบร้อย ไม่หลุด/ชำรุด)', N'สลักล็อกแน่นหนา มีซีลพลาสติกล็อกครบถ้วน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_hose', 'EX', N'สายฉีดและหัวฉีด (ไม่แตกร้าว ไม่ฉีกขาด ไม่อุดตัน)', N'สายยางยืดหยุ่นดี ไม่มีฝุ่นหรือแมลงอุดตันในหัวฉีด', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_label', 'EX', N'ป้ายกำกับและวิธีการใช้งาน (ชัดเจน อ่านง่าย ไม่หลุดลอก)', N'แสดงประเภทเพลิง Class A, B, C, K ชัดเจน', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+        ('ex_access', 'EX', N'จุดติดตั้งและสิ่งกีดขวาง (เข้าถึงสะดวก ไม่มีสิ่งของบัง)', N'ไม่มีโต๊ะ ลัง หรือสิ่งของวางกีดขวางในระยะ 1 เมตร', 'ALL', 8, 1, '2025-01-01T00:00:00+07:00'),
+        -- FHC
+        ('fhc_code_tag', 'FHC', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตู้ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_glass', 'FHC', N'กระจกและบานตู้ (ไม่แตก ปิดสนิท กุญแจ/ตัวล็อกเปิดได้ปกติ)', N'บานตู้เปิด-ปิดได้สะดวก กระจกใส ไม่แตกร้าว', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_valve', 'FHC', N'ข้อต่อและวาล์วควบคุมน้ำ (ไม่รั่วซึม เปิด-ปิดสะดวก ไม่ฝืด)', N'วาล์วน้ำไม่หยด ไม่รั่วซึม หมุนได้ปกติ', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_hose', 'FHC', N'สายส่งน้ำดับเพลิง (พับทบเรียบร้อย สภาพดี ไม่เปื่อย/ฉีกขาด)', N'สายผ้าใบแห้งสนิท พับเก็บอย่างถูกต้อง', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_nozzle', 'FHC', N'หัวฉีดปรับฝอย (หมุนปรับม่านน้ำและปิด-เปิดได้คล่องตัว)', N'หัวฉีดทองเหลืองหรืออัลลอยด์ทำงานได้เต็มประสิทธิภาพ', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_f_wrench', 'FHC', N'มีประแจ F และเลขตรงกับตู้', N'มีประแจขันวาล์ว (ประแจ F) แขวนอยู่ภายในตู้ และระบุหมายเลขตรงกับหมายเลขตู้', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+        ('fhc_access', 'FHC', N'พื้นที่ด้านหน้าตู้ (โล่ง ไม่มีสิ่งของวางกีดขวาง)', N'พื้นที่หน้าตู้ระยะ 1 เมตรไม่มีสิ่งกีดขวางการปฏิบัติงาน', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+        -- FH
+        ('fh_code_tag', 'FH', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตู้ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_body', 'FH', N'สภาพตู้ภายนอก (สะอาด สีแดงไม่ลอก บานพับแข็งแรง)', N'ตู้เหล็กอบสีแดง ไม่มีสนิม บานพับไม่ตก', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_reel', 'FH', N'ม้วนสายส่งน้ำ/แร็คหมุน (ม้วนเก็บเรียบร้อย หมุนจ่ายสายคล่องตัว)', N'ล้อม้วนสายหมุนได้ลื่น ไม่ติดขัด', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_hose_seal', 'FH', N'สภาพสายส่งน้ำและข้อต่อ (ยางไม่แห้งกรอบ ปลอกยึดแน่นหนา)', N'สายไม่แตกลายงา ข้อต่อสวมเร็วล็อคแน่น', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_main_valve', 'FH', N'วาล์วน้ำหลัก (ไม่ฝืด ไม่พบน้ำรั่วซึมตลอดเวลา)', N'วาล์ว Angle Valve เปิด-ปิดได้ปกติ ไม่ซึม', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_gasket', 'FH', N'ปะเก็นยางข้อต่อ (ยืดหยุ่นดี ไม่เปื่อยยุ่ย)', N'ปะเก็นยางโอริงอยู่ครบ ไม่กรอบแตก', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+        ('fh_f_wrench', 'FH', N'มีประแจ F และเลขตรงกับตู้', N'มีประแจขันวาล์ว (ประแจ F) แขวนอยู่ภายในตู้ และระบุหมายเลขตรงกับหมายเลขตู้', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+        -- HD
+        ('hd_code_tag', 'HD', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_cap', 'HD', N'ฝาครอบเกลียวและโซ่คล้อง (มีครบถ้วน ยึดแน่น ไม่สูญหาย)', N'ฝาครอบปิดแน่น ป้องกันเศษขยะและสิ่งแปลกปลอม', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_thread', 'HD', N'เกลียวทางเข้า-ออกน้ำ (เกลียวสมบูรณ์ ไม่หวาน ไม่บุบสลาย)', N'เกลียวสะอาด สามารถต่อกับสายดับเพลิงได้ทันที', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_valve', 'HD', N'วาล์วเปิด-ปิดน้ำ (เปิด-ปิดคล่องตัว ไม่ติดตาย ไม่รั่วซึม)', N'สามารถขันเปิด-ปิดน้ำประปาดับเพลิงได้', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_paint_sign', 'HD', N'การทาสีและเครื่องหมายเตือน (สีแดงสดใส มีป้ายเตือนห้ามจอดรถขวาง)', N'สังเกตเห็นได้ง่ายในเวลากลางวันและกลางคืน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_base', 'HD', N'ตัวเรือนและฐานรากคอนกรีต (มั่นคงแข็งแรง ไม่แตกร้าวหรือทรุดตัว)', N'ติดตั้งยึดติดพื้นมั่นคง ไม่เอียงหรือโยกคลอน', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+        ('hd_clearance', 'HD', N'รัศมีโดยรอบหัวดับเพลิง (ระยะ 1-3 เมตร โล่งแจ้ง ไม่มีสิ่งกีดขวาง)', N'รถดับเพลิงสามารถเข้าเทียบและต่อสายได้สะดวกรวดเร็ว', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+        -- FDC
+        ('fdc_code_tag', 'FDC', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_cap', 'FDC', N'ฝาปิดและโซ่คล้อง (มีฝาปิดป้องกันสิ่งแปลกปลอม โซ่คล้องยึดแน่น)', N'ฝาปิดครบถ้วน ป้องกันเศษหิน ดิน หรือสิ่งอุดตันในท่อ', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_thread', 'FDC', N'เกลียวข้อต่อรับน้ำ (เกลียวสมบูรณ์ ไม่บุบสลาย ไม่หวาน)', N'เกลียวและเขี้ยวข้อต่อสวมเร็วอยู่ในสภาพสมบูรณ์ พร้อมต่อสายส่งน้ำ', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_clapper', 'FDC', N'ลิ้นกันกลับ/เช็ควาล์ว (Clapper Valve หมุน/ปิดเปิดได้คล่อง ไม่ติดขัด)', N'ลิ้นเปิด-ปิดทางเดียวทำงานได้ปกติ ไม่ติดขัด น้ำไม่ไหลย้อนกลับ', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_gasket', 'FDC', N'ปะเก็นยางข้อต่อ (ยืดหยุ่นดี ไม่เปื่อยยุ่ย ไม่แตกลายงา)', N'ปะเก็นยางอยู่ครบถ้วน ป้องกันน้ำรั่วซึมขณะอัดแรงดัน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_sign', 'FDC', N'ป้ายสัญลักษณ์และบอกประเภทระบบ (ชัดเจน ไม่หลุดลอก)', N'มีป้ายระบุ FDC สำหรับระบบสปริงเกลอร์ (Auto Sprinkler) หรือสายฉีด (Standpipe)', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+        ('fdc_clearance', 'FDC', N'ทางเข้าถึงและพื้นที่โดยรอบ (ระยะ 1-3 เมตร โล่งแจ้ง ไม่มีสิ่งกีดขวาง)', N'รถดับเพลิงสามารถเข้าเทียบและต่อสายส่งน้ำเข้าอาคารได้ทันที', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00');
+    `);
+
+    apiCache.invalidate('checklists');
+    res.json({ success: true, message: 'Reset checklist items to defaults' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
 // SPA Client-Side Routing Fallback
 // ==========================================
 app.get('*', (req, res, next) => {
@@ -3004,6 +3273,80 @@ async function start() {
       console.log('✅ ตรวจสอบและซิงค์ข้อมูลตำแหน่ง (Positions) 84 ตำแหน่งเรียบร้อย');
     } catch (e) {
       console.log('Positions seed notice:', e.message);
+    }
+
+    // Seed default equipment categories (Extinguisher Types)
+    try {
+      await query(`
+        IF NOT EXISTS (SELECT 1 FROM dbo.equipment_categories)
+        BEGIN
+          INSERT INTO dbo.equipment_categories (id, equipment_type, name, created_at)
+          VALUES
+            ('cat_01', 'EX', N'ผงเคมีแห้ง (Dry Chemical)', '2025-01-01T00:00:00+07:00'),
+            ('cat_02', 'EX', N'ก๊าซคาร์บอนไดออกไซด์ (CO2)', '2025-01-01T00:00:00+07:00'),
+            ('cat_03', 'EX', N'โฟม (Foam)', '2025-01-01T00:00:00+07:00'),
+            ('cat_04', 'EX', N'สารสะอาดดับเพลิง (Clean Agent)', '2025-01-01T00:00:00+07:00'),
+            ('cat_05', 'EX', N'เคมีเปียก (Wet Chemical)', '2025-01-01T00:00:00+07:00');
+          PRINT 'Default equipment categories seeded';
+        END;
+      `);
+    } catch (e) {
+      console.log('Categories seed notice:', e.message);
+    }
+
+    // Seed default checklist items if empty
+    try {
+      await query(`
+        IF NOT EXISTS (SELECT 1 FROM dbo.checklist_items)
+        BEGIN
+          INSERT INTO dbo.checklist_items (id, equipment_type, label, description, applicable_category, order_index, is_active, created_at)
+          VALUES
+            -- EX
+            ('ex_code_tag', 'EX', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตัวถังตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_pressure', 'EX', N'เกจวัดแรงดัน (เกจชี้อยู่ในแถบสีเขียวปกติ)', N'เข็มชี้อยู่ในช่วงที่กำหนด ไม่ตกและไม่เกิน', 'DRY_CHEMICAL', 2, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_weight', 'EX', N'น้ำหนักถัง (ตรงตามเกณฑ์มาตรฐานที่ระบุ)', N'น้ำหนักสารดับเพลิงอยู่ในเกณฑ์มาตรฐาน ชั่งตรวจเช็คน้ำหนักตามรอบ', 'CO2', 3, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_body', 'EX', N'สภาพตัวถังภายนอก (ไม่ผุกร่อน ไม่บวม ไม่บุบ ไม่เป็นสนิม)', N'ตัวถังและสีสมบูรณ์ ไม่ผุพัง', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_pin_seal', 'EX', N'สลักนิรภัยและซีลล็อก (อยู่ในสภาพเรียบร้อย ไม่หลุด/ชำรุด)', N'สลักล็อกแน่นหนา มีซีลพลาสติกล็อกครบถ้วน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_hose', 'EX', N'สายฉีดและหัวฉีด (ไม่แตกร้าว ไม่ฉีกขาด ไม่อุดตัน)', N'สายยางยืดหยุ่นดี ไม่มีฝุ่นหรือแมลงอุดตันในหัวฉีด', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_label', 'EX', N'ป้ายกำกับและวิธีการใช้งาน (ชัดเจน อ่านง่าย ไม่หลุดลอก)', N'แสดงประเภทเพลิง Class A, B, C, K ชัดเจน', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+            ('ex_access', 'EX', N'จุดติดตั้งและสิ่งกีดขวาง (เข้าถึงสะดวก ไม่มีสิ่งของบัง)', N'ไม่มีโต๊ะ ลัง หรือสิ่งของวางกีดขวางในระยะ 1 เมตร', 'ALL', 8, 1, '2025-01-01T00:00:00+07:00'),
+            -- FHC
+            ('fhc_code_tag', 'FHC', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตู้ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_glass', 'FHC', N'กระจกและบานตู้ (ไม่แตก ปิดสนิท กุญแจ/ตัวล็อกเปิดได้ปกติ)', N'บานตู้เปิด-ปิดได้สะดวก กระจกใส ไม่แตกร้าว', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_valve', 'FHC', N'ข้อต่อและวาล์วควบคุมน้ำ (ไม่รั่วซึม เปิด-ปิดสะดวก ไม่ฝืด)', N'วาล์วน้ำไม่หยด ไม่รั่วซึม หมุนได้ปกติ', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_hose', 'FHC', N'สายส่งน้ำดับเพลิง (พับทบเรียบร้อย สภาพดี ไม่เปื่อย/ฉีกขาด)', N'สายผ้าใบแห้งสนิท พับเก็บอย่างถูกต้อง', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_nozzle', 'FHC', N'หัวฉีดปรับฝอย (หมุนปรับม่านน้ำและปิด-เปิดได้คล่องตัว)', N'หัวฉีดทองเหลืองหรืออัลลอยด์ทำงานได้เต็มประสิทธิภาพ', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_f_wrench', 'FHC', N'มีประแจ F และเลขตรงกับตู้', N'มีประแจขันวาล์ว (ประแจ F) แขวนอยู่ภายในตู้ และระบุหมายเลขตรงกับหมายเลขตู้', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+            ('fhc_access', 'FHC', N'พื้นที่ด้านหน้าตู้ (โล่ง ไม่มีสิ่งของวางกีดขวาง)', N'พื้นที่หน้าตู้ระยะ 1 เมตรไม่มีสิ่งกีดขวางการปฏิบัติงาน', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+            -- FH
+            ('fh_code_tag', 'FH', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์บนตู้ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_body', 'FH', N'สภาพตู้ภายนอก (สะอาด สีแดงไม่ลอก บานพับแข็งแรง)', N'ตู้เหล็กอบสีแดง ไม่มีสนิม บานพับไม่ตก', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_reel', 'FH', N'ม้วนสายส่งน้ำ/แร็คหมุน (ม้วนเก็บเรียบร้อย หมุนจ่ายสายคล่องตัว)', N'ล้อม้วนสายหมุนได้ลื่น ไม่ติดขัด', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_hose_seal', 'FH', N'สภาพสายส่งน้ำและข้อต่อ (ยางไม่แห้งกรอบ ปลอกยึดแน่นหนา)', N'สายไม่แตกลายงา ข้อต่อสวมเร็วล็อคแน่น', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_main_valve', 'FH', N'วาล์วน้ำหลัก (ไม่ฝืด ไม่พบน้ำรั่วซึมตลอดเวลา)', N'วาล์ว Angle Valve เปิด-ปิดได้ปกติ ไม่ซึม', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_gasket', 'FH', N'ปะเก็นยางข้อต่อ (ยืดหยุ่นดี ไม่เปื่อยยุ่ย)', N'ปะเก็นยางโอริงอยู่ครบ ไม่กรอบแตก', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+            ('fh_f_wrench', 'FH', N'มีประแจ F และเลขตรงกับตู้', N'มีประแจขันวาล์ว (ประแจ F) แขวนอยู่ภายในตู้ และระบุหมายเลขตรงกับหมายเลขตู้', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+            -- HD
+            ('hd_code_tag', 'HD', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_cap', 'HD', N'ฝาครอบเกลียวและโซ่คล้อง (มีครบถ้วน ยึดแน่น ไม่สูญหาย)', N'ฝาครอบปิดแน่น ป้องกันเศษขยะและสิ่งแปลกปลอม', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_thread', 'HD', N'เกลียวทางเข้า-ออกน้ำ (เกลียวสมบูรณ์ ไม่หวาน ไม่บุบสลาย)', N'เกลียวสะอาด สามารถต่อกับสายดับเพลิงได้ทันที', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_valve', 'HD', N'วาล์วเปิด-ปิดน้ำ (เปิด-ปิดคล่องตัว ไม่ติดตาย ไม่รั่วซึม)', N'สามารถขันเปิด-ปิดน้ำประปาดับเพลิงได้', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_paint_sign', 'HD', N'การทาสีและเครื่องหมายเตือน (สีแดงสดใส มีป้ายเตือนห้ามจอดรถขวาง)', N'สังเกตเห็นได้ง่ายในเวลากลางวันและกลางคืน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_base', 'HD', N'ตัวเรือนและฐานรากคอนกรีต (มั่นคงแข็งแรง ไม่แตกร้าวหรือทรุดตัว)', N'ติดตั้งยึดติดพื้นมั่นคง ไม่เอียงหรือโยกคลอน', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+            ('hd_clearance', 'HD', N'รัศมีโดยรอบหัวดับเพลิง (ระยะ 1-3 เมตร โล่งแจ้ง ไม่มีสิ่งกีดขวาง)', N'รถดับเพลิงสามารถเข้าเทียบและต่อสายได้สะดวกรวดเร็ว', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00'),
+            -- FDC
+            ('fdc_code_tag', 'FDC', N'ป้ายรหัสของอุปกรณ์ตรงกัน อุปกรณ์:สถานที่', N'รหัสอุปกรณ์ตรงกับป้ายบอกตำแหน่งที่ติดตั้ง', 'ALL', 1, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_cap', 'FDC', N'ฝาปิดและโซ่คล้อง (มีฝาปิดป้องกันสิ่งแปลกปลอม โซ่คล้องยึดแน่น)', N'ฝาปิดครบถ้วน ป้องกันเศษหิน ดิน หรือสิ่งอุดตันในท่อ', 'ALL', 2, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_thread', 'FDC', N'เกลียวข้อต่อรับน้ำ (เกลียวสมบูรณ์ ไม่บุบสลาย ไม่หวาน)', N'เกลียวและเขี้ยวข้อต่อสวมเร็วอยู่ในสภาพสมบูรณ์ พร้อมต่อสายส่งน้ำ', 'ALL', 3, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_clapper', 'FDC', N'ลิ้นกันกลับ/เช็ควาล์ว (Clapper Valve หมุน/ปิดเปิดได้คล่อง ไม่ติดขัด)', N'ลิ้นเปิด-ปิดทางเดียวทำงานได้ปกติ ไม่ติดขัด น้ำไม่ไหลย้อนกลับ', 'ALL', 4, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_gasket', 'FDC', N'ปะเก็นยางข้อต่อ (ยืดหยุ่นดี ไม่เปื่อยยุ่ย ไม่แตกลายงา)', N'ปะเก็นยางอยู่ครบถ้วน ป้องกันน้ำรั่วซึมขณะอัดแรงดัน', 'ALL', 5, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_sign', 'FDC', N'ป้ายสัญลักษณ์และบอกประเภทระบบ (ชัดเจน ไม่หลุดลอก)', N'มีป้ายระบุ FDC สำหรับระบบสปริงเกลอร์ (Auto Sprinkler) หรือสายฉีด (Standpipe)', 'ALL', 6, 1, '2025-01-01T00:00:00+07:00'),
+            ('fdc_clearance', 'FDC', N'ทางเข้าถึงและพื้นที่โดยรอบ (ระยะ 1-3 เมตร โล่งแจ้ง ไม่มีสิ่งกีดขวาง)', N'รถดับเพลิงสามารถเข้าเทียบและต่อสายส่งน้ำเข้าอาคารได้ทันที', 'ALL', 7, 1, '2025-01-01T00:00:00+07:00');
+          PRINT 'Default checklist items seeded';
+        END;
+      `);
+    } catch (e) {
+      console.log('Checklists seed notice:', e.message);
     }
 
 
