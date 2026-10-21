@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -19,6 +20,47 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8787;
+
+/**
+ * High-performance In-Memory Cache with TTL & Pattern Invalidation
+ * Dramatically reduces Azure SQL Database vCore consumption and DTU usage
+ */
+class MemoryCache {
+  constructor() {
+    this.cache = new Map();
+  }
+
+  get(key) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    if (Date.now() > item.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return item.data;
+  }
+
+  set(key, data, ttlSeconds = 30) {
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + ttlSeconds * 1000
+    });
+  }
+
+  invalidate(prefix) {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  clear() {
+    this.cache.clear();
+  }
+}
+
+export const apiCache = new MemoryCache();
 
 /**
  * Helper: Insert notification into database
@@ -78,6 +120,7 @@ async function insertNotification({ id, recipient_user_id, target_role, sender_n
     created_at: now
   });
 
+  apiCache.invalidate('notif_');
   return notifId;
 }
 
@@ -95,6 +138,7 @@ const upload = multer({
 
 // Middleware
 app.use(cors());
+app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -115,10 +159,16 @@ const distDir = fs.existsSync(path.join(__dirname, '..', 'dist'))
 
 if (fs.existsSync(distDir)) {
   app.use(express.static(distDir, {
+    maxAge: '1d',
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('sw.js')) {
         res.setHeader('Service-Worker-Allowed', '/');
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
+        // Static JS/CSS with content hashes can be aggressively cached for 1 year
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       } else if (filePath.endsWith('manifest.json') || filePath.endsWith('manifest.webmanifest')) {
         res.setHeader('Content-Type', 'application/manifest+json');
         res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -222,8 +272,13 @@ app.get('/api/health', async (req, res) => {
 // ==========================================
 app.get('/api/departments', async (req, res) => {
   try {
+    const cached = apiCache.get('departments');
+    if (cached) return res.json(cached);
+
     const result = await query('SELECT id, name, created_at FROM dbo.departments ORDER BY created_at ASC');
-    res.json({ departments: result.recordset || [] });
+    const responseData = { departments: result.recordset || [] };
+    apiCache.set('departments', responseData, 600); // 10 minutes cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -241,6 +296,7 @@ app.post('/api/departments', async (req, res) => {
       'INSERT INTO dbo.departments (id, name, created_at) VALUES (@id, @name, @created_at)',
       { id, name: name.trim(), created_at: now }
     );
+    apiCache.invalidate('departments');
     res.json({ success: true, department: { id, name: name.trim(), created_at: now } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -279,6 +335,8 @@ app.put('/api/departments/:id', async (req, res) => {
       );
     }
 
+    apiCache.invalidate('departments');
+    apiCache.invalidate('users');
     res.json({ success: true, updatedDepartment: newName, previousName: prevName });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -304,6 +362,8 @@ app.post('/api/departments/migrate', async (req, res) => {
       { toName, fromName }
     );
 
+    apiCache.invalidate('departments');
+    apiCache.invalidate('users');
     res.json({ success: true, updatedCount: userRes.rowsAffected?.[0] || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -314,6 +374,7 @@ app.delete('/api/departments/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM dbo.departments WHERE id = @id', { id });
+    apiCache.invalidate('departments');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -326,6 +387,10 @@ app.delete('/api/departments/:id', async (req, res) => {
 app.get('/api/positions', async (req, res) => {
   try {
     const { department } = req.query;
+    const cacheKey = `positions_${department || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     let queryText = 'SELECT id, name, default_role, department, created_at FROM dbo.positions';
     const params = {};
     if (department && department !== 'ALL' && department !== 'ทั้งหมด') {
@@ -334,7 +399,9 @@ app.get('/api/positions', async (req, res) => {
     }
     queryText += ' ORDER BY created_at ASC';
     const result = await query(queryText, params);
-    res.json({ positions: result.recordset || [] });
+    const responseData = { positions: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 600); // 10 minutes cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -358,6 +425,7 @@ app.post('/api/positions', async (req, res) => {
       'INSERT INTO dbo.positions (id, name, default_role, department, created_at) VALUES (@id, @name, @default_role, @dept, @created_at)',
       { id, name: trimmedName, default_role: role, dept, created_at: now }
     );
+    apiCache.invalidate('positions');
     res.json({ success: true, position: { id, name: trimmedName, default_role: role, department: dept, created_at: now } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -399,6 +467,8 @@ app.put('/api/positions/:id', async (req, res) => {
       );
     }
 
+    apiCache.invalidate('positions');
+    apiCache.invalidate('users');
     res.json({ success: true, updatedPosition: newName, previousName: prevName, department: dept });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -420,6 +490,8 @@ app.post('/api/positions/migrate', async (req, res) => {
       { toName, fromName, now }
     );
 
+    apiCache.invalidate('positions');
+    apiCache.invalidate('users');
     res.json({ success: true, updatedCount: userRes.rowsAffected?.[0] || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -436,6 +508,7 @@ app.delete('/api/positions/:id', async (req, res) => {
     }
 
     await query('DELETE FROM dbo.positions WHERE id = @id', { id });
+    apiCache.invalidate('positions');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -529,6 +602,7 @@ app.post('/api/auth/register', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, message: 'สมัครสมาชิกสำเร็จ รอแอดมินอนุมัติ' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -578,6 +652,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 // ==========================================
 app.get('/api/users', async (req, res) => {
   try {
+    const cached = apiCache.get('users');
+    if (cached) return res.json(cached);
+
     const result = await query(`
       SELECT id, username, password, full_name, pending_full_name, email, department, position, role,
              status, is_safety_committee, avatar_url, created_at, updated_at
@@ -588,7 +665,9 @@ app.get('/api/users', async (req, res) => {
       ...u,
       is_safety_committee: Boolean(u.is_safety_committee)
     }));
-    res.json({ users });
+    const responseData = { users };
+    apiCache.set('users', responseData, 30); // 30 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -621,6 +700,7 @@ app.post('/api/users', async (req, res) => {
       updated_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -661,6 +741,7 @@ app.put('/api/users/:id', async (req, res) => {
       id
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -695,6 +776,7 @@ app.put('/api/users/:id/safety-committee', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, is_safety_committee: Boolean(is_safety_committee) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -723,6 +805,7 @@ app.post('/api/users/:id/approve', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -734,6 +817,7 @@ app.post('/api/users/:id/reset-password', async (req, res) => {
     const { id } = req.params;
     const now = new Date().toISOString();
     await query('UPDATE dbo.users SET password = \'0000\', updated_at = @now WHERE id = @id', { now, id });
+    apiCache.invalidate('users');
     res.json({ success: true, message: 'รีเซ็ทรหัสผ่านเป็น 0000 เรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -750,6 +834,7 @@ app.post('/api/users/:id/change-password', async (req, res) => {
       now,
       id
     });
+    apiCache.invalidate('users');
     res.json({ success: true, message: 'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -789,6 +874,7 @@ app.post('/api/users/:id/request-name-change', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, pending_full_name: cleanName });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -834,6 +920,7 @@ app.post('/api/users/:id/approve-name-change', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('users');
     res.json({ success: true, approved: Boolean(approve), new_full_name: approve ? targetPendingName : user.full_name });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -844,6 +931,7 @@ app.delete('/api/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM dbo.users WHERE id = @id', { id });
+    apiCache.invalidate('users');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -856,6 +944,10 @@ app.delete('/api/users/:id', async (req, res) => {
 app.get('/api/equipment', async (req, res) => {
   try {
     const { type } = req.query;
+    const cacheKey = `equipment_${type || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     let queryText = 'SELECT * FROM dbo.equipment';
     const params = {};
     if (type) {
@@ -864,7 +956,9 @@ app.get('/api/equipment', async (req, res) => {
     }
     queryText += ' ORDER BY sequence_number ASC';
     const result = await query(queryText, params);
-    res.json({ equipment: result.recordset || [] });
+    const responseData = { equipment: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 30); // 30 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -940,6 +1034,7 @@ app.post('/api/equipment/bulk', async (req, res) => {
       createdEquipment.push(newEquip);
     }
 
+    apiCache.invalidate('equipment');
     res.json({ success: true, count: createdEquipment.length, equipment: createdEquipment });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -991,6 +1086,7 @@ app.post('/api/equipment', async (req, res) => {
       updated_at: now
     });
 
+    apiCache.invalidate('equipment');
     res.json({ success: true, id, code, sequence_number: vacantSeq });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1028,6 +1124,7 @@ app.put('/api/equipment/:id', async (req, res) => {
       id
     });
 
+    apiCache.invalidate('equipment');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1046,6 +1143,7 @@ app.put('/api/equipment/:id/usage-status', async (req, res) => {
         updated_at = @now
       WHERE id = @id
     `, { status, now, id });
+    apiCache.invalidate('equipment');
     res.json({ success: true, usage_status: status });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1056,6 +1154,7 @@ app.delete('/api/equipment/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM dbo.equipment WHERE id = @id', { id });
+    apiCache.invalidate('equipment');
     res.json({ success: true, message: 'ลบอุปกรณ์เรียบร้อยแล้ว เลขรหัสจะถูกนำกลับมาใช้ใหม่อัตโนมัติ' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1078,6 +1177,7 @@ app.post('/api/equipment/:id/resolve-defect', async (req, res) => {
       WHERE id = @id
     `, { defectNotes, now, id });
 
+    apiCache.invalidate('equipment');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1090,6 +1190,10 @@ app.post('/api/equipment/:id/resolve-defect', async (req, res) => {
 app.get('/api/inspections', async (req, res) => {
   try {
     const { equipmentId } = req.query;
+    const cacheKey = `inspections_${equipmentId || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     let queryText = 'SELECT * FROM dbo.inspections';
     const params = {};
     if (equipmentId) {
@@ -1098,7 +1202,9 @@ app.get('/api/inspections', async (req, res) => {
     }
     queryText += ' ORDER BY inspection_date DESC';
     const result = await query(queryText, params);
-    res.json({ inspections: result.recordset || [] });
+    const responseData = { inspections: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 30); // 30 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1189,6 +1295,9 @@ app.post('/api/inspections', async (req, res) => {
       });
     }
 
+    apiCache.invalidate('inspections');
+    apiCache.invalidate('equipment');
+    if (data.task_id) apiCache.invalidate('tasks');
     res.json({ success: true, inspection_id: inspId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1235,6 +1344,8 @@ app.put('/api/inspections/:id', async (req, res) => {
       }
     }
 
+    apiCache.invalidate('inspections');
+    apiCache.invalidate('equipment');
     res.json({ success: true, message: 'แก้ไขเวลาตรวจเช็คเรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1274,6 +1385,8 @@ app.delete('/api/inspections/:id', async (req, res) => {
       });
     }
 
+    apiCache.invalidate('inspections');
+    apiCache.invalidate('equipment');
     res.json({ success: true, message: 'ลบข้อมูลการตรวจเช็คเรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1331,6 +1444,8 @@ app.post('/api/inspections/clear-month', async (req, res) => {
       });
     }
 
+    apiCache.invalidate('inspections');
+    apiCache.invalidate('equipment');
     res.json({
       success: true,
       deletedCount: delRes.rowsAffected?.[0] || 0,
@@ -1624,6 +1739,10 @@ app.post('/api/cleanup/retention-2years', async (req, res) => {
 app.get('/api/tasks', async (req, res) => {
   try {
     const { userId } = req.query;
+    const cacheKey = `tasks_${userId || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     let queryText = 'SELECT * FROM dbo.tasks';
     const params = {};
     if (userId) {
@@ -1632,7 +1751,9 @@ app.get('/api/tasks', async (req, res) => {
     }
     queryText += ' ORDER BY created_at DESC';
     const result = await query(queryText, params);
-    res.json({ tasks: result.recordset || [] });
+    const responseData = { tasks: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 30); // 30 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1679,6 +1800,7 @@ app.post('/api/tasks', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('tasks');
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1732,6 +1854,7 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
       });
     }
 
+    apiCache.invalidate('tasks');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1748,6 +1871,7 @@ app.delete('/api/tasks/completed', async (req, res) => {
       params.userId = userId;
     }
     const result = await query(queryText, params);
+    apiCache.invalidate('tasks');
     res.json({ success: true, deletedCount: result.rowsAffected?.[0] || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1758,6 +1882,7 @@ app.delete('/api/tasks/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM dbo.tasks WHERE id = @id', { id });
+    apiCache.invalidate('tasks');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1775,6 +1900,10 @@ app.get('/api/notifications', async (req, res) => {
     if (role === 'GUEST' || String(userId).startsWith('guest')) {
       return res.json({ notifications: [] });
     }
+
+    const cacheKey = `notif_${userId || 'anon'}_${role || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
 
     const result = await query(`
       SELECT TOP 50 n.* FROM dbo.notifications n
@@ -1827,7 +1956,9 @@ app.get('/api/notifications', async (req, res) => {
       }
     }
 
-    res.json({ notifications: deduplicated });
+    const responseData = { notifications: deduplicated };
+    apiCache.set(cacheKey, responseData, 15); // 15 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1848,6 +1979,7 @@ app.post('/api/notifications/send', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('notif_');
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1858,6 +1990,7 @@ app.post('/api/notifications/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
     await query('UPDATE dbo.notifications SET is_read = 1 WHERE id = @id', { id });
+    apiCache.invalidate('notif_');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1870,6 +2003,7 @@ app.post('/api/notifications/mark-all-read', async (req, res) => {
     await query('UPDATE dbo.notifications SET is_read = 1 WHERE recipient_user_id = @userId OR recipient_user_id IS NULL', {
       userId: userId || ''
     });
+    apiCache.invalidate('notif_');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1909,6 +2043,7 @@ app.post('/api/notifications/clear', async (req, res) => {
       `, { user_id, now });
     }
 
+    apiCache.invalidate('notif_');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1934,6 +2069,7 @@ app.delete('/api/notifications/:id', async (req, res) => {
       await query('DELETE FROM dbo.notifications WHERE id = @id', { id });
     }
 
+    apiCache.invalidate('notif_');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1955,6 +2091,9 @@ function getBangkokDateTime(date = new Date()) {
 
 app.get('/api/safety-patrols', async (req, res) => {
   try {
+    const cached = apiCache.get('patrols');
+    if (cached) return res.json(cached);
+
     // Automatically close any rounds that have reached their closing time
     await runAutoCloseSafetyPatrols();
 
@@ -1964,7 +2103,9 @@ app.get('/api/safety-patrols', async (req, res) => {
       FROM dbo.safety_patrols p
       ORDER BY p.patrol_date DESC, p.created_at DESC
     `);
-    res.json({ patrols: result.recordset || [] });
+    const responseData = { patrols: result.recordset || [] };
+    apiCache.set('patrols', responseData, 20); // 20 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2067,6 +2208,7 @@ app.post('/api/safety-patrols', async (req, res) => {
         findings_count: 0
       }
     });
+    apiCache.invalidate('patrols');
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2112,6 +2254,7 @@ app.put('/api/safety-patrols/:id/status', async (req, res) => {
         });
       }
 
+      apiCache.invalidate('patrols');
       return res.json({
         success: true,
         status: 'OPEN',
@@ -2128,6 +2271,7 @@ app.put('/api/safety-patrols/:id/status', async (req, res) => {
         WHERE id = @id
       `, { nowIso, id });
 
+      apiCache.invalidate('patrols');
       return res.json({ success: true, status: 'CLOSED' });
     }
   } catch (err) {
@@ -2179,6 +2323,7 @@ app.post('/api/safety-patrols/:id/extend', async (req, res) => {
       created_at: nowIso
     });
 
+    apiCache.invalidate('patrols');
     res.json({
       success: true,
       status: 'OPEN',
@@ -2208,6 +2353,7 @@ app.put('/api/safety-patrols/:id', async (req, res) => {
       WHERE id = @id
     `, { id, title, patrol_date, time_range, location, description, now });
 
+    apiCache.invalidate('patrols');
     res.json({ success: true, message: 'แก้ไขข้อมูลรอบเดินตรวจเรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2219,6 +2365,8 @@ app.delete('/api/safety-patrols/:id', async (req, res) => {
     const { id } = req.params;
     await query('DELETE FROM dbo.safety_findings WHERE patrol_id = @id', { id });
     await query('DELETE FROM dbo.safety_patrols WHERE id = @id', { id });
+    apiCache.invalidate('patrols');
+    apiCache.invalidate('findings');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2229,6 +2377,10 @@ app.delete('/api/safety-patrols/:id', async (req, res) => {
 app.get('/api/safety-findings', async (req, res) => {
   try {
     const { patrolId, category } = req.query;
+    const cacheKey = `findings_${patrolId || 'all'}_${category || 'all'}`;
+    const cached = apiCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     let queryText = 'SELECT * FROM dbo.safety_findings WHERE 1=1';
     const params = {};
     if (patrolId) {
@@ -2241,7 +2393,9 @@ app.get('/api/safety-findings', async (req, res) => {
     }
     queryText += ' ORDER BY created_at DESC';
     const result = await query(queryText, params);
-    res.json({ findings: result.recordset || [] });
+    const responseData = { findings: result.recordset || [] };
+    apiCache.set(cacheKey, responseData, 20); // 20 seconds cache
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2316,6 +2470,8 @@ app.post('/api/safety-findings', async (req, res) => {
       updated_at: now
     });
 
+    apiCache.invalidate('findings');
+    apiCache.invalidate('patrols');
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2357,6 +2513,7 @@ app.put('/api/safety-findings/:id/resolve', async (req, res) => {
       created_at: now
     });
 
+    apiCache.invalidate('findings');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2412,6 +2569,7 @@ app.put('/api/safety-findings/:id/review', async (req, res) => {
       });
     }
 
+    apiCache.invalidate('findings');
     res.json({ success: true, status: newStatus });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2436,6 +2594,7 @@ app.put('/api/safety-findings/:id', async (req, res) => {
       WHERE id = @id
     `, { id, category, sub_type, location, description, recommendation, photo_url, now });
 
+    apiCache.invalidate('findings');
     res.json({ success: true, message: 'แก้ไขข้อมูลรายการตรวจ คปอ. เรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2446,6 +2605,8 @@ app.delete('/api/safety-findings/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM dbo.safety_findings WHERE id = @id', { id });
+    apiCache.invalidate('findings');
+    apiCache.invalidate('patrols');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2458,6 +2619,7 @@ app.delete('/api/safety-findings/:id', async (req, res) => {
 app.post('/api/cron/monthly-reset', async (req, res) => {
   try {
     await runMonthlyReset();
+    apiCache.clear();
     res.json({ success: true, message: 'Monthly reset completed manually' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2467,6 +2629,7 @@ app.post('/api/cron/monthly-reset', async (req, res) => {
 app.post('/api/cron/yearly-cleanup', async (req, res) => {
   try {
     await runYearlyCleanup();
+    apiCache.clear();
     res.json({ success: true, message: 'Yearly cleanup completed manually' });
   } catch (err) {
     res.status(500).json({ error: err.message });

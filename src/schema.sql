@@ -275,3 +275,43 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_findings_status' AND 
 BEGIN
     CREATE INDEX idx_findings_status ON dbo.safety_findings (status);
 END;
+
+-- ===========================================================================
+-- Additional High-Performance Indexes for vCore & CPU Optimization
+-- ===========================================================================
+
+-- 12. Equipment Compound Index (Filtering by usage_status and sorting by sequence_number)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_equipment_usage_type_seq' AND object_id = OBJECT_ID('dbo.equipment'))
+BEGIN
+    CREATE INDEX idx_equipment_usage_type_seq ON dbo.equipment (usage_status, type, sequence_number);
+END;
+
+-- 13. Safety Patrols Status & Date Index (for live countdowns & auto-close checks)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_patrols_status_date' AND object_id = OBJECT_ID('dbo.safety_patrols'))
+BEGIN
+    CREATE INDEX idx_patrols_status_date ON dbo.safety_patrols (status, patrol_date DESC);
+END;
+
+-- 14. Safety Findings Compound Index (for filtering by patrol and category)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_findings_patrol_cat' AND object_id = OBJECT_ID('dbo.safety_findings'))
+BEGIN
+    CREATE INDEX idx_findings_patrol_cat ON dbo.safety_findings (patrol_id, category, status);
+END;
+
+-- 15. Notifications Composite Index (for user-specific query with target_role and is_read)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_notif_user_role_read' AND object_id = OBJECT_ID('dbo.notifications'))
+BEGIN
+    CREATE INDEX idx_notif_user_role_read ON dbo.notifications (recipient_user_id, target_role, is_read, created_at DESC);
+END;
+
+-- 16. Tasks Composite Index (for assigned tasks lookup)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_tasks_assign_status' AND object_id = OBJECT_ID('dbo.tasks'))
+BEGIN
+    CREATE INDEX idx_tasks_assign_status ON dbo.tasks (assigned_to_id, status, created_at DESC);
+END;
+
+-- 17. Inspections Equipment & Date Index (for latest inspection lookups)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_inspections_equip_date_desc' AND object_id = OBJECT_ID('dbo.inspections'))
+BEGIN
+    CREATE INDEX idx_inspections_equip_date_desc ON dbo.inspections (equipment_id, inspection_date DESC);
+END;
